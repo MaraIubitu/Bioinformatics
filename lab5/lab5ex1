@@ -1,0 +1,193 @@
+import random
+import time
+import sys
+from collections import defaultdict
+
+# PARAMETERS
+NUM_READS = 2000
+MIN_READ_LEN = 100
+MAX_READ_LEN = 150
+MIN_OVERLAP = 30
+MAX_OVERLAP = 120
+
+random.seed(42)
+
+def get_sequence_from_user():
+    print("Enter a DNA sequence (should be between 1000-3000 nucleotides):")
+    seq = input().strip().upper()
+    while not (1000 <= len(seq) <= 3000) or not all(c in 'ACGT' for c in seq):
+        print("Invalid sequence. Please enter a DNA sequence between 1000-3000 nucleotides using only ACGT:")
+        seq = input().strip().upper()
+    return ">input_sequence", seq
+
+def take_reads(seq, num_reads, min_len, max_len):
+    reads = []
+    seqlen = len(seq)
+    for _ in range(num_reads):
+        L = random.randint(min_len, max_len)
+        if seqlen <= L:
+            start = 0
+            read = seq[:seqlen]
+        else:
+            start = random.randint(0, seqlen - L)
+            read = seq[start:start+L]
+        reads.append(read)
+    return reads
+
+def build_prefix_suffix_maps(reads, min_olap, max_olap):
+    pref = defaultdict(list)
+    suff = defaultdict(list)
+    for i, r in enumerate(reads):
+        L = len(r)
+        max_l = min(max_olap, L)
+        for l in range(min_olap, max_l+1):
+            pref[(l, r[:l])].append(i)
+            suff[(l, r[-l:])].append(i)
+    return pref, suff
+
+def assemble_reads_greedy(reads, min_olap=30, max_olap=120):
+    N = len(reads)
+    used = [False]*N
+    pref, suff = build_prefix_suffix_maps(reads, min_olap, max_olap)
+    contigs = []
+
+    indices = list(range(N))
+    random.shuffle(indices)
+
+    for idx in indices:
+        if used[idx]:
+            continue
+        contig = reads[idx]
+        used[idx] = True
+        extended = True
+        while extended:
+            extended = False
+            for l in range(min(max_olap, len(contig)), min_olap-1, -1):
+                key = (l, contig[-l:])
+                candidates = pref.get(key, [])
+                chosen = None
+                for c in candidates:
+                    if not used[c] and reads[c] != contig:
+                        chosen = c
+                        break
+                if chosen is not None:
+                    contig = contig + reads[chosen][l:]
+                    used[chosen] = True
+                    extended = True
+                    break
+            if extended:
+                continue
+            for l in range(min(max_olap, len(contig)), min_olap-1, -1):
+                key = (l, contig[:l])
+                candidates = suff.get(key, [])
+                chosen = None
+                for c in candidates:
+                    if not used[c] and reads[c] != contig:
+                        chosen = c
+                        break
+                if chosen is not None:
+                    contig = reads[chosen][:len(reads[chosen])-l] + contig
+                    used[chosen] = True
+                    extended = True
+                    break
+        contigs.append(contig)
+
+    merged = True
+    while merged:
+        merged = False
+        contigs.sort(key=len, reverse=True)
+        new_contigs = []
+        skip = set()
+        for i in range(len(contigs)):
+            if i in skip:
+                continue
+            a = contigs[i]
+            merged_this = False
+            for j in range(i+1, len(contigs)):
+                if j in skip:
+                    continue
+                b = contigs[j]
+                max_ol = 0
+                max_ol = 0
+                max_possible = min(len(a), len(b), max_olap)
+                for l in range(max_possible, min_olap-1, -1):
+                    if a.endswith(b[:l]):
+                        max_ol = l
+                        break
+                if max_ol >= min_olap:
+                    a = a + b[max_ol:]
+                    skip.add(j)
+                    merged = True
+                    merged_this = True
+                    break
+                for l in range(max_possible, min_olap-1, -1):
+                    if b.endswith(a[:l]):
+                        a = b + a[l:]
+                        skip.add(j)
+                        merged = True
+                        merged_this = True
+                        break
+                if merged_this:
+                    break
+            new_contigs.append(a)
+        contigs = new_contigs
+
+    if not contigs:
+        return ""
+    contigs.sort(key=len, reverse=True)
+    return contigs[0]
+
+def display_reads(reads):
+    print("\nGenerated reads:")
+    for i, r in enumerate(reads, 1):
+        print(f">read_{i}")
+        print(r)
+
+def display_sequence(header, seq):
+    print(f"\n{header}")
+    for i in range(0, len(seq), 80):
+        print(seq[i:i+80])
+
+def main():
+    start_time = time.time()
+    print("Please provide a DNA sequence...")
+    try:
+        header, seq = get_sequence_from_user()
+    except Exception as e:
+        print("Error getting sequence:", e)
+        sys.exit(1)
+
+    print("\nSequence length:", len(seq))
+    print("\nOriginal sequence:")
+    display_sequence(header, seq)
+
+    reads = take_reads(seq, NUM_READS, MIN_READ_LEN, MAX_READ_LEN)
+    display_reads(reads)
+    print(f"\n{len(reads)} reads generated")
+
+    print("\nAssembling reads (greedy) ...")
+    recon = assemble_reads_greedy(reads, MIN_OVERLAP, MAX_OVERLAP)
+    print("Assembly finished. Reconstructed length:", len(recon))
+    
+    print("\nReconstructed sequence:")
+    display_sequence(">reconstructed_sequence", recon)
+
+    contains = ""
+    if len(recon) >= len(seq) and seq in recon:
+        contains = "reconstructed contains the original sequence as substring."
+    elif len(recon) < len(seq) and recon in seq:
+        contains = "reconstructed is a substring of the original sequence."
+    else:
+        overlap_len = 0
+        for l in range(min(len(seq), len(recon)), 0, -1):
+            if seq.startswith(recon[:l]) or seq.endswith(recon[-l:]):
+                overlap_len = l
+                break
+        contains = f"best overlap length between original and reconstructed: {overlap_len}"
+
+    elapsed = time.time() - start_time
+    print(f"\nResults: {contains}")
+    print(f"Elapsed time: {elapsed:.1f}s")
+
+if __name__ == "__main__":
+    main()
